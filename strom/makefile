@@ -5,6 +5,8 @@
 
 all:
 
+setdate:
+	sudo timedatectl set-timezone Europe/Berlin
 setty:
 	stty -F /dev/ttyUSB0 9600 -parenb cs8 -cstopb -ixoff -crtscts -hupcl -ixon -opost -onlcr -isig -icanon -iexten -echo -echoe -echoctl -echoke
 iskdump:

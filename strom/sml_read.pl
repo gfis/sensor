@@ -5,22 +5,41 @@
 # 2020-09-10, Georg Fischer
 #
 #:# Usage:
-#:#   perl sml_read.pl [-d mode] > output # liest von /dev/ttyUSB0
-#:#       mode: 0 nur Nutzdaten, 1 Gruppen, 2 Komplettdump
+#:#   perl sml_read.pl [-d mode] [-f logfile] # liest von /dev/ttyUSB0
+#:#       -d mode: 0 nur Nutzdaten, 1 Gruppen, 2 Komplettdump
+#:#       -f logfile (default: /run/sensor/sml_read.log)
 #--------------------------------------------------------
 use strict;
 use integer;
 use warnings;
 
-my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime (time());
-my $timestamp = sprintf ("%04d-%02d-%02d %02d:%02d:%02d", $year + 1900, $mon + 1, $mday, $hour, $min, $sec);
-$timestamp = sprintf ("%04d-%02d-%02d", $year + 1900, $mon + 1, $mday);
+# $| = 1; # autoflush on
+
 if (scalar(@ARGV) < 0) {
     print `grep -E "^#:#" $0 | cut -b3-`;
     exit;
 }
+my $old_time  = time();
+my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime ($old_time);
+my $old_stamp = sprintf ("%04d-%02d-%02d %02d:%02d:%02d", $year + 1900, $mon + 1, $mday, $hour, $min, $sec);
+my $new_stamp = $old_stamp;
+# yyyy-mm-dd HH:MM:SS
+# 0123456789012345678
+my $old_day   = substr($old_stamp, 0, 10); 
+my $old_m10   = substr($old_stamp, 14, 1); 
+my $new_day   = $old_day;
+my $new_m10   = $old_m10;
+my $new_time  = $old_time; # aktuelle Zeit der Messung in Sekunden seit 1970-01-01
+my $dwh       = 0; # dezi-Watt-Stunden
+
+my $tty = "/dev/ttyUSB0";
+# Terminaleinstellungen fuer Weidmann USB-Lesekopf: Baudrate, Einzelzeichen etc.
+# system("stty -F $tty 9600 -parenb cs8 -cstopb -ixoff -crtscts -hupcl -ixon -opost -onlcr -isig -icanon -iexten -echo -echoe -echoctl -echoke");
+open(TTY, "<", $tty) || die "Kann nicht von $tty lesen";
+
 my $debug = 0;
 my $compressed = 0;
+my $log_file = "/run/sensor/sml_read.log";
 while (scalar(@ARGV) > 0 and ($ARGV[0] =~ m{\A[\-\+]})) {
     my $opt = shift(@ARGV);
     if (0) {
@@ -28,10 +47,22 @@ while (scalar(@ARGV) > 0 and ($ARGV[0] =~ m{\A[\-\+]})) {
         $compressed = shift(@ARGV);
     } elsif ($opt   =~ m{d}) {
         $debug      = shift(@ARGV);
+    } elsif ($opt   =~ m{f}) {
+        $log_file   = shift(@ARGV);
     } else {
         die "invalid option \"$opt\"\n";
     }
 } # while $opt
+
+my $log_path = "/run/sensor";
+if ($log_file =~ m{\A(\/(\w+\/)*)}) { # fremdes Verzeichnis
+    $log_path = substr($1, 0, length($1) - 1); # ausser dem letzten Schraegstrich
+    mkdir($log_path);
+} # fremdes Verzeichnis
+open(OBI, ">", $log_file) or die "Kann $log_file nicht schreiben";
+# binmode OBI;
+print "Log in $log_file\n";
+print OBI "# Log Start $old_stamp\n";
 
 my %obis_codes = # von http://blog.bubux.de/raspberry-pi-ehz-auslesen/
     (   '0100000000FF', 'Seriennummer'
@@ -53,9 +84,7 @@ my %obis_codes = # von http://blog.bubux.de/raspberry-pi-ehz-auslesen/
     ,   '0100380700FF', 'Current Power L2'
     ,   '01004C0700FF', 'Current Power L3'
     );
-my $tty = "/dev/ttyUSB0";
 my $sml_start = "1b1b1b1b01010101";
-open(TTY, "<", $tty) || die "Kann nicht von $tty lesen";
 my $msg_state = "su1b"; # Suche nach $sml_start
 my $imark = 0; # Position in $sml_start
 my $sync  = 0; # solange kein $sml_start erkannt wurde
@@ -90,9 +119,6 @@ while (1) { # unendliche Schleife
         } elsif ($hex2 eq substr($sml_start, $imark, 2)) { # stimmt mit naechstem Byte in $sml_start ueberein
             $imark += 2;
         } else {
-        	for (my $ind = 0; $ind < $imark - 2; $ind += 2) {
-        	    # &proc(substr($sml_start, $ind, 2));
-        	}
             $msg_state = "su1b"; # kein vollstaendiger $sml_start - suche weiter danach
         }
     } else {
@@ -108,32 +134,32 @@ sub proc {
     } elsif ($asn_state eq "sust") { # Suche Simple Type
         $asttyp = hex(substr($byte, 0, 1));
         $astlen = hex(substr($byte, 1, 1));
-    	$astbuf = $byte;
+        $astbuf = $byte;
         if (0) {
         } elsif ($asttyp == 0 && $astlen == 0) {
             &dump(" # Ende SML-Nachricht\n");
         } elsif ($asttyp == 7) { # Gruppe
-        	&dump(" # Gruppe\n");
+            &dump(" # Gruppe\n");
         } elsif ($asttyp == 8) { # long octet string, naechstes Byte wird auf Laenge addiert
-        	$astind = 1;
-        	$asn_state = "lon2";
-        } else {        	
+            $astind = 1;
+            $asn_state = "lon2";
+        } else {            
             $astind = 1;
             if ($astind < $astlen) {
                 $asn_state = "inst";
             } else {
-            	&dump(" # 1 Byte\n");
+                &dump(" # 1 Byte\n");
             }
         }
      } elsif ($asn_state eq "lon2") { 
         $astbuf .= $byte;
-     	$astlen = ($astlen << 4) + hex($byte);
-     	$astind ++;
-     	$asn_state = "inst";
+        $astlen = ($astlen << 4) + hex($byte);
+        $astind ++;
+        $asn_state = "inst";
      } elsif ($asn_state eq "inst") {
         $astbuf .= $byte;
         $astind ++;
-    	if ($astind >= $astlen) { # Ende des Felds
+        if ($astind >= $astlen) { # Ende des Felds
             if (0) {
             } elsif ($asttyp == 0) { # octet string
                 &dump(" # Bytes\n");
@@ -149,7 +175,7 @@ sub proc {
             $asn_state = "sust";
         }
     } else {
-    	die "Ungueltiger Zustand $asn_state";
+        die "Ungueltiger Zustand $asn_state";
     }
 } # proc
 #----
@@ -159,23 +185,23 @@ sub dump {
     } elsif ($debug >= 2) {
         print $astbuf . $text;
     } else { # akkumuliere OBIS-Gruppe
-    	if (substr($astbuf, 0, 2) eq "77") { # Beginn einer Gruppe von 7
-    		if ($obix >= 0) {
-    			&eval_obis();
-    		}
-    		$obix = 0;
-    	} elsif ($obix >= 0 && $obix < 7) {
-    		$obis[$obix ++] = $astbuf;
-    	    if ($obix == 7) {
-    	    	&eval_obis();
-    	    	$obix = -1;
-    		}
-    	}
+        if (substr($astbuf, 0, 2) eq "77") { # Beginn einer Gruppe von 7
+            if ($obix >= 0) {
+                &eval_obis();
+            }
+            $obix = 0;
+        } elsif ($obix >= 0 && $obix < 7) {
+            $obis[$obix ++] = $astbuf;
+            if ($obix == 7) {
+                &eval_obis();
+                $obix = -1;
+            }
+        }
     } # akkumuliere
 } # dump
 #----
 sub eval_obis {
-	my $code = uc(substr($obis[0], 2));
+    my $code = uc(substr($obis[0], 2));
     if ($debug >= 1 && (substr($obis[0], 0, 4) eq "0701")) {
         print "# OBIS: " . join(", ", @obis) 
             . ": " . $obis_codes{$code}
@@ -183,16 +209,33 @@ sub eval_obis {
     }
     if (0) {
     } elsif ($code eq "0100010800FF") { # Zaehlerstand
-    	my $kwh = hex(substr($obis[5], 2));
-    	my $unix_time = time();
-        my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime ($unix_time);
-        my $timestamp = sprintf ("%04d-%02d-%02d_%02d:%02d:%02d", $year + 1900, $mon + 1, $mday, $hour, $min, $sec);
-    	$outbuf = join(",", $unix_time, $timestamp, $kwh % 10000, $kwh / 10000);
+        $dwh = hex(substr($obis[5], 2)); # deci-Watt-Stunden
+        $new_time = time();
+        my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime ($new_time);
+        $new_stamp = sprintf ("%04d-%02d-%02d_%02d:%02d:%02d", $year + 1900, $mon + 1, $mday, $hour, $min, $sec);
+        if ($old_day ne substr($new_stamp, 0, 10)) { # Tag hat gewechselt
+            $old_day =  substr($new_stamp, 0, 10);
+            $old_m10 =  substr($new_stamp, 14, 1);
+            $new_day =  $old_day;
+            $new_m10 =  $old_m10;
+            close(OBI);
+            open (OBI, ">", $log_file) or die "Kann $log_file am Tagesende nicht ueberschreiben";
+        } # Tageswechsel
     } elsif ($code eq "0100100700FF") { # momentane Leistung
-    	print $outbuf . "," . hex(substr($obis[5], 2)) . "\n";
+        my $watt = hex(substr($obis[5], 2));
+        my $kwh  = ($dwh / 10000) . "." . ($dwh % 10000);
+        if (1) { # Warum ???
+            close(OBI);
+            open (OBI, ">>", $log_file) or die "Kann $log_file am Tagesende nicht ueberschreiben";
+        }
+        if (! print OBI join(",", $new_time, $new_stamp, $kwh, $watt) . "\n") {
+        	print STDERR "error: errno\n";
+        }
+        print           join(",", $new_time, $new_stamp, $kwh, $watt) . "\n";
     }   
 } # eval_obis
 __DATA__
+-d 1:
 # OBIS: 070100010800ff, 6500000180, 01, 621e, 52ff, 5900000000010f5a0a, 01: Wirkarbeit Zaehlerstand
 # OBIS: 070100010801ff, 01, 01, 621e, 52ff, 5900000000010f5a0a, 01: Wirk-Energie Tarif 1 Bezug
 # OBIS: 070100010802ff, 01, 01, 621e, 52ff, 590000000000000000, 01: Wirk-Energie Tarif 2 Bezug
@@ -200,3 +243,9 @@ __DATA__
 # OBIS: 070100240700ff, 01, 01, 621b, 5200, 5500000012, 01: Current Power L1
 # OBIS: 070100380700ff, 01, 01, 621b, 5200, 5500000021, 01: Current Power L2
 # OBIS: 0701004c0700ff, 01, 01, 621b, 5200, 5500000008, 01: Current Power L3
+
+-d 0:
+Unix-Zeit  Systemzeit          kWh       Watt
+1599832641,2020-09-11_14:57:21,1778.4749,60
+1599832645,2020-09-11_14:57:25,1778.4749,59
+1599832647,2020-09-11_14:57:27,1778.4750,63
