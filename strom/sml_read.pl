@@ -59,10 +59,10 @@ if ($log_file =~ m{\A(\/(\w+\/)*)}) { # fremdes Verzeichnis
     $log_path = substr($1, 0, length($1) - 1); # ausser dem letzten Schraegstrich
     mkdir($log_path);
 } # fremdes Verzeichnis
-open(OBI, ">", $log_file) or die "Kann $log_file nicht schreiben";
-# binmode OBI;
+open(my $logh, ">>", $log_file) or die "Kann $log_file nicht schreiben";
+# binmode $logh;
 print "Log in $log_file\n";
-print OBI "# Log Start $old_stamp\n";
+print $logh "# Log Start $old_stamp\n";
 
 my %obis_codes = # von http://blog.bubux.de/raspberry-pi-ehz-auslesen/
     (   '0100000000FF', 'Seriennummer'
@@ -213,27 +213,41 @@ sub eval_obis {
         $new_time = time();
         my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime ($new_time);
         $new_stamp = sprintf ("%04d-%02d-%02d_%02d:%02d:%02d", $year + 1900, $mon + 1, $mday, $hour, $min, $sec);
-        if ($old_day ne substr($new_stamp, 0, 10)) { # Tag hat gewechselt
-            $old_day =  substr($new_stamp, 0, 10);
-            $old_m10 =  substr($new_stamp, 14, 1);
-            $new_day =  $old_day;
-            $new_m10 =  $old_m10;
-            close(OBI);
-            open (OBI, ">", $log_file) or die "Kann $log_file am Tagesende nicht ueberschreiben";
+        # 0123456789012345678
+        # yyyy-mm-dd HH:MM:SS
+        $new_day =  substr($new_stamp, 0, 10);
+        $new_m10 =  substr($new_stamp, 14, 1);
+        if ($old_day ne $new_day) { # Tag hat gewechselt
+            $old_day =  $new_day;
+            $old_m10 =  $new_m10;
+            close($logh);
+            open ($logh, ">", $log_file) or die "Kann $log_file am Tagesende nicht ueberschreiben";
+            print $logh "# Log Fortsetzung $new_stamp\n";
         } # Tageswechsel
     } elsif ($code eq "0100100700FF") { # momentane Leistung
         my $watt = hex(substr($obis[5], 2));
-        my $kwh  = ($dwh / 10000) . "." . ($dwh % 10000);
+        my $data  = sprintf("%02x%02x%02x%02x",  $dwh & 0xff, ($dwh >> 8) & 0xff, ($dwh >> 16) & 0xff, ($dwh >> 24) & 0xff);
+        my $daten = sprintf("%04d", $watt);
+        # my $kwh  = ($dwh / 10000) . "." . ($dwh % 10000);
         if (1) { # Warum ???
-            close(OBI);
-            open (OBI, ">>", $log_file) or die "Kann $log_file am Tagesende nicht ueberschreiben";
+            close($logh);
+            open ($logh, ">>", $log_file) or die "Kann $log_file am Tagesende nicht ueberschreiben";
         }
-        if (! print OBI join(",", $new_time, $new_stamp, $kwh, $watt) . "\n") {
-        	print STDERR "error: errno\n";
+        print $logh join(",", $new_time, substr($new_stamp, 11), $dwh, $watt, $data, $daten) . "\n"; # ohne Datum
+        if ($old_m10 ne $new_m10) {
+        	$old_m10 =  $new_m10;
+        	&callback($new_time, $data, $daten);
         }
-        print           join(",", $new_time, $new_stamp, $kwh, $watt) . "\n";
-    }   
+    } # momentane Leistung
 } # eval_obis
+
+sub callback {
+	my ($time, $data, $daten) = @_;
+    my $id    = "S77887"; # id fuer Sigfox-Callback
+    my $wget  = "wget -q \"http://einblickbiblio.de/sensor/sensor.php?id=$id\&time=$time\&data=$data\&daten=$daten\" -O /dev/null";
+    print $logh "$wget\n";
+    print $logh `$wget`;
+} # callback
 __DATA__
 -d 1:
 # OBIS: 070100010800ff, 6500000180, 01, 621e, 52ff, 5900000000010f5a0a, 01: Wirkarbeit Zaehlerstand
