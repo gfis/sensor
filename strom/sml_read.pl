@@ -204,7 +204,7 @@ sub eval_obis {
     my $code = uc(substr($obis[0], 2));
     if ($debug >= 1 && (substr($obis[0], 0, 4) eq "0701")) {
         print "# OBIS: " . join(", ", @obis) 
-            . ": " . $obis_codes{$code}
+            . ": " . ($obis_codes{$code} || "unknobis")
             . "\n";
     }
     if (0) {
