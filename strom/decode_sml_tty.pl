@@ -182,7 +182,7 @@ sub dump {
             $buffer  = "Zaehlerstand";
             $state = 1;
             if ($debug >= 1) { print "# hit: $state $code $field $buffer\n"; }
-        } elsif ($level == 5 and $code eq "59" and $state == 1) {
+        } elsif ($level == 5 and ($code =~ m{[56]9}) and $state == 1) {
             #           59 0000000000f51dfb = 16063995
             $buffer .= "=$postfix; ";
             $state = 2;

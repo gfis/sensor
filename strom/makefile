@@ -1,11 +1,17 @@
 #!make
 
 # makefile for SML-Stromzaehler
+# 2022-03-28; Erlaeuterungen; WK=75
 # 2020-09-10: auf strawpi.local per WLAN; *CH
 # 2020-08-09, Georg Fischer; VF=39
+# In der crontab von root muss 1 Zeile stehen:
+# sudo crontab -l
+#   @reboot make -f /home/pi/sensor/strom/makefile
+#
+# sml_read.pl schreibt mit wget auf einblickbiblio.de/sensor/sensit.txt;
+# sml{decode|comp} sind nur Testhilfen.
 
 all: setty 
-	# wird mit @reboot in der crontab von root aufgerufen:
 	mkdir /run/sensor/
 	perl /home/pi/sensor/strom/sml_read.pl 2> /run/sensor/sml_read.log &
 #----
